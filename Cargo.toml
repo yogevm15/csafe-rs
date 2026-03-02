@@ -1,0 +1,16 @@
+[package]
+name = "csafe"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+tokio = ["dep:tokio"]
+
+[dependencies]
+memchr = "2"
+tokio = { version = "1", optional = true, features = ["io-util"] }
+
+[dev-dependencies]
+tokio-serial = "5"
+anyhow = "1"
+tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time"] }
