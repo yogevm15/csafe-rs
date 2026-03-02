@@ -1,5 +1,5 @@
 use crate::commands::Command;
-use crate::frame::{self, Decoder, FrameDecoder};
+use crate::frame::{self, Decoder, FrameDecoder, ResponseDecoder};
 use std::io::{Read, Write};
 
 pub struct Client<T> {
@@ -13,13 +13,17 @@ impl<T> Client<T> {
 }
 
 impl<T: Read + Write> Client<T> {
-    pub fn send_command<C: Command>(&mut self, command: C) -> Result<C::Response, std::io::Error> {
+    pub fn send_command<C: Command>(
+        &mut self,
+        command: C,
+    ) -> Result<Option<C::Response>, std::io::Error> {
         for d in frame::encode(command.encode()) {
+            log::debug!("TX: {:02X?}", d);
             self.transport.write_all(d)?;
         }
 
         let mut started = false;
-        let response_decoder = C::response_decoder();
+        let response_decoder = ResponseDecoder::new(C::id(), C::response_decoder());
         let mut frame_decoder = FrameDecoder::new(response_decoder);
         loop {
             let mut buf = [0; 16];
@@ -39,6 +43,7 @@ impl<T: Read + Write> Client<T> {
                 }
             }
             started = true;
+            log::debug!("RX: {:02X?}", &buf[..res]);
 
             match frame_decoder.feed(&buf[..res]) {
                 Ok((Ok(o), _)) => return Ok(o),

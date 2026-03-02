@@ -1,20 +1,20 @@
 use crate::client::Client;
 use crate::commands::Command;
-use crate::frame;
-use crate::frame::{Decoder, FrameDecoder};
+use crate::frame::{self, Decoder, FrameDecoder, ResponseDecoder};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 impl<T: AsyncRead + AsyncWrite + Unpin> Client<T> {
     pub async fn send_command_async<C: Command>(
         &mut self,
         command: C,
-    ) -> Result<C::Response, std::io::Error> {
+    ) -> Result<Option<C::Response>, std::io::Error> {
         for d in frame::encode(command.encode()) {
+            log::debug!("TX: {:02X?}", d);
             self.transport.write_all(d).await?;
         }
 
         let mut started = false;
-        let response_decoder = C::response_decoder();
+        let response_decoder = ResponseDecoder::new(C::id(), C::response_decoder());
         let mut frame_decoder = FrameDecoder::new(response_decoder);
         loop {
             let mut buf = [0; 16];
@@ -34,6 +34,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Client<T> {
                 }
             }
             started = true;
+            log::debug!("RX: {:02X?}", &buf[..res]);
 
             match frame_decoder.feed(&buf[..res]) {
                 Ok((Ok(o), _)) => return Ok(o),
