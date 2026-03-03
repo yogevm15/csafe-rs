@@ -1,93 +1,88 @@
 use crate::frame::byte_stuff::unstuff;
-use crate::frame::checksum::{ChecksumDecoder, InvalidChecksum};
+use crate::frame::checksum::checksum;
 use crate::frame::{END_FLAG, START_FLAG};
+use memchr::memchr;
+use std::marker::PhantomData;
 
-pub enum FrameDecodeError {
+#[derive(Debug, thiserror::Error)]
+pub enum DecodeError {
+    #[error("Invalid checksum")]
     InvalidChecksum,
+    #[error("Unexpected end of data")]
+    UnexpectedEndOfData,
+    #[error("Invalid start flag")]
     InvalidStartFlag,
-    InvalidEndFlag,
+    #[error("Invalid data")]
+    InvalidData,
+    #[error("Unknown command")]
+    UnknownCommand,
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
 }
 
-impl From<FrameDecodeError> for std::io::Error {
-    fn from(e: FrameDecodeError) -> Self {
-        let msg = match e {
-            FrameDecodeError::InvalidChecksum => "Invalid checksum",
-            FrameDecodeError::InvalidStartFlag => "Invalid start flag",
-            FrameDecodeError::InvalidEndFlag => "Invalid end flag",
-        };
-
-        std::io::Error::new(std::io::ErrorKind::InvalidData, msg)
-    }
+pub trait Decode {
+    fn decode(data: &[u8]) -> Result<Self, DecodeError>;
 }
 
-pub trait Decoder: Sized {
-    type Output;
-    fn feed(self, data: &[u8]) -> Result<(Self::Output, usize), Self>;
+enum FrameDecoderState {
+    WaitingForStart,
+    WaitingForEnd { data: Vec<u8> },
 }
 
-pub enum FrameDecoder<D: Decoder> {
-    WaitingForStart { decoder: ChecksumDecoder<D> },
-    WaitingForData { decoder: ChecksumDecoder<D> },
-    WaitingForEnd { output: D::Output },
+pub struct FrameDecoder<F> {
+    state: FrameDecoderState,
+    _marker: PhantomData<F>,
 }
 
-impl<D: Decoder> FrameDecoder<D> {
-    pub fn new(decoder: D) -> Self {
-        FrameDecoder::WaitingForStart {
-            decoder: ChecksumDecoder::new(decoder),
+impl<F> FrameDecoder<F> {
+    pub fn new() -> Self {
+        Self {
+            state: FrameDecoderState::WaitingForStart,
+            _marker: PhantomData,
         }
     }
 }
 
-impl<D: Decoder> Decoder for FrameDecoder<D> {
-    type Output = Result<D::Output, FrameDecodeError>;
-
-    fn feed(self, data: &[u8]) -> Result<(Self::Output, usize), Self> {
-        match self {
-            FrameDecoder::WaitingForStart { decoder } => {
-                if data.is_empty() {
-                    return Err(FrameDecoder::WaitingForStart { decoder });
-                }
-
-                if data[0] != START_FLAG {
-                    return Ok((Err(FrameDecodeError::InvalidStartFlag), 0));
-                }
-
-                FrameDecoder::WaitingForData { decoder }
-                    .feed(&data[1..])
-                    .map(|(o, n)| (o, n + 1))
-            }
-            FrameDecoder::WaitingForData { mut decoder } => {
-                let mut total = 0;
-                for data in unstuff(data) {
-                    match decoder.feed(data) {
-                        Ok((Ok(output), n)) => {
-                            total += n;
-                            let (_, remaining) = data.split_at(n);
-
-                            return FrameDecoder::WaitingForEnd { output }
-                                .feed(remaining)
-                                .map(|(o, n)| (o, total + n));
-                        }
-                        Ok((Err(InvalidChecksum), n)) => {
-                            return Ok((Err(FrameDecodeError::InvalidChecksum), total + n));
-                        }
-                        Err(d) => decoder = d,
+impl<F: Decode> FrameDecoder<F> {
+    pub fn feed(&mut self, mut data: &[u8]) -> Result<Vec<F>, DecodeError> {
+        if data.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut output = vec![];
+        loop {
+            match &mut self.state {
+                FrameDecoderState::WaitingForStart => {
+                    if data[0] != START_FLAG {
+                        return Err(DecodeError::InvalidStartFlag);
                     }
 
-                    total += data.len();
+                    self.state = FrameDecoderState::WaitingForEnd { data: Vec::new() };
+                    data = &data[1..];
+                    continue;
                 }
+                FrameDecoderState::WaitingForEnd {
+                    data: existing_data,
+                } => {
+                    let Some(pos) = memchr(END_FLAG, &data) else {
+                        for data in unstuff(data) {
+                            existing_data.extend_from_slice(data);
+                        }
+                        return Ok(output);
+                    };
 
-                Err(FrameDecoder::WaitingForData { decoder })
-            }
-            FrameDecoder::WaitingForEnd { output } => {
-                if data.is_empty() {
-                    return Err(FrameDecoder::WaitingForEnd { output });
+                    for data in unstuff(&data[..pos]) {
+                        existing_data.extend_from_slice(data);
+                    }
+                    let (&received_checksum, rest) =
+                        existing_data.split_last().ok_or(DecodeError::UnexpectedEndOfData)?;
+                    if received_checksum != checksum(0, rest) {
+                        return Err(DecodeError::InvalidChecksum);
+                    }
+                    output.push(F::decode(&rest)?);
+                    self.state = FrameDecoderState::WaitingForStart;
+                    data = &data[pos + 1..];
+                    continue;
                 }
-                if data[0] != END_FLAG {
-                    return Ok((Err(FrameDecodeError::InvalidEndFlag), 0));
-                }
-                Ok((Ok(output), 1))
             }
         }
     }

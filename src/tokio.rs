@@ -1,21 +1,22 @@
+use crate::CommandResponse;
 use crate::client::Client;
 use crate::commands::Command;
-use crate::frame::{self, Decoder, FrameDecoder, ResponseDecoder};
+use crate::frame::{self, DecodeError, Request};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 impl<T: AsyncRead + AsyncWrite + Unpin> Client<T> {
-    pub async fn send_command_async<C: Command>(
+    pub async fn send_command_async(
         &mut self,
-        command: C,
-    ) -> Result<Option<C::Response>, std::io::Error> {
-        for d in frame::encode(command.encode()) {
+        command: Command,
+    ) -> Result<Vec<CommandResponse>, DecodeError> {
+        let command_identifier = command.identifier();
+        let request = Request::new(command);
+        for d in frame::encode(&request) {
             log::debug!("TX: {:02X?}", d);
             self.transport.write_all(d).await?;
         }
 
         let mut started = false;
-        let response_decoder = ResponseDecoder::new(C::id(), C::response_decoder());
-        let mut frame_decoder = FrameDecoder::new(response_decoder);
         loop {
             let mut buf = [0; 16];
             let res = self.transport.read(&mut buf).await?;
@@ -25,22 +26,28 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Client<T> {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
                         "No response received",
-                    ));
+                    )
+                    .into());
                 } else {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
                         "Partial response received",
-                    ));
+                    )
+                    .into());
                 }
             }
             started = true;
             log::debug!("RX: {:02X?}", &buf[..res]);
-
-            match frame_decoder.feed(&buf[..res]) {
-                Ok((Ok(o), _)) => return Ok(o),
-                Ok((Err(e), _)) => return Err(e.into()),
-                Err(d) => frame_decoder = d,
+            let responses = self.decoder.feed(&buf[..res])?;
+            let responses: Vec<_> = responses
+                .into_iter()
+                .flat_map(|r| r.data)
+                .filter(|r| r.identifier() == command_identifier)
+                .collect();
+            if responses.is_empty() {
+                continue;
             }
+            return Ok(responses);
         }
     }
 }

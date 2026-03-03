@@ -219,6 +219,7 @@ dependencies = [
  "log",
  "memchr",
  "ratatui",
+ "thiserror",
  "tokio",
  "tokio-serial",
 ]
