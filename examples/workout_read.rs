@@ -4,7 +4,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use csafe::{Client, GetGrade, GetSpeed, GetTWork};
+use csafe::{Client, Command, CommandResponse};
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
@@ -105,31 +105,35 @@ async fn poll_device<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     client: &mut Client<T>,
     stats: &mut WorkoutStats,
 ) -> anyhow::Result<()> {
-    if let Some(v) = client.send_command_async(GetSpeed).await? {
-        let (val, unit) = v.display();
-        stats.speed_value = val;
+    if let Some(CommandResponse::GetSpeed { unit, speed }) = client
+        .send_command_async(Command::GetSpeed)
+        .await?
+        .into_iter()
+        .next()
+    {
+        stats.speed_value = speed as f64;
         stats.speed_unit = unit.to_string();
-        stats.speed_raw = v.raw;
+        stats.speed_raw = speed;
     } else {
         log::debug!("GetSpeed: status-only response (no data)");
     }
 
-    if let Some(v) = client.send_command_async(GetGrade).await? {
-        let (val, unit) = v.display();
-        stats.grade_value = val;
-        stats.grade_unit = unit.to_string();
-        stats.grade_raw = v.raw;
-    } else {
-        log::debug!("GetGrade: status-only response (no data)");
-    }
+    // if let Some(v) = client.send_command_async(Command::GetGrade).await? {
+    //     let (val, unit) = v.display();
+    //     stats.grade_value = val;
+    //     stats.grade_unit = unit.to_string();
+    //     stats.grade_raw = v.raw;
+    // } else {
+    //     log::debug!("GetGrade: status-only response (no data)");
+    // }
 
-    if let Some(t) = client.send_command_async(GetTWork).await? {
-        stats.hours = t.hours;
-        stats.minutes = t.minutes;
-        stats.seconds = t.seconds;
-    } else {
-        log::debug!("GetTWork: status-only response (no data)");
-    }
+    // if let Some(t) = client.send_command_async(Command::GetTWork).await? {
+    //     stats.hours = t.hours;
+    //     stats.minutes = t.minutes;
+    //     stats.seconds = t.seconds;
+    // } else {
+    //     log::debug!("GetTWork: status-only response (no data)");
+    // }
 
     Ok(())
 }

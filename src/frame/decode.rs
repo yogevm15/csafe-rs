@@ -20,7 +20,7 @@ pub enum DecodeError {
     IoError(#[from] std::io::Error),
 }
 
-pub trait Decode {
+pub trait Decode: Sized {
     fn decode(data: &[u8]) -> Result<Self, DecodeError>;
 }
 
@@ -73,9 +73,10 @@ impl<F: Decode> FrameDecoder<F> {
                     for data in unstuff(&data[..pos]) {
                         existing_data.extend_from_slice(data);
                     }
-                    let (&received_checksum, rest) =
-                        existing_data.split_last().ok_or(DecodeError::UnexpectedEndOfData)?;
-                    if received_checksum != checksum(0, rest) {
+                    let (&received_checksum, rest) = existing_data
+                        .split_last()
+                        .ok_or(DecodeError::UnexpectedEndOfData)?;
+                    if received_checksum != checksum(rest) {
                         return Err(DecodeError::InvalidChecksum);
                     }
                     output.push(F::decode(&rest)?);

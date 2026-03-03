@@ -11,10 +11,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Client<T> {
     ) -> Result<Vec<CommandResponse>, DecodeError> {
         let command_identifier = command.identifier();
         let request = Request::new(command);
-        for d in frame::encode(&request) {
-            log::debug!("TX: {:02X?}", d);
-            self.transport.write_all(d).await?;
-        }
+        let encoded_request = frame::encode(request);
+        log::debug!("TX: {:02X?}", encoded_request);
+        self.transport.write_all(&encoded_request).await?;
 
         let mut started = false;
         loop {

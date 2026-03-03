@@ -20,10 +20,9 @@ impl<T: Read + Write> Client<T> {
     pub fn send_command(&mut self, command: Command) -> Result<Vec<CommandResponse>, DecodeError> {
         let command_identifier = command.identifier();
         let request = Request::new(command);
-        for d in frame::encode(&request) {
-            log::debug!("TX: {:02X?}", d);
-            self.transport.write_all(d)?;
-        }
+        let encoded_request = frame::encode(request);
+        log::debug!("TX: {:02X?}", encoded_request);
+        self.transport.write_all(&encoded_request)?;
 
         let mut started = false;
         loop {
